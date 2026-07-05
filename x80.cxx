@@ -736,34 +736,47 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
         }
         case 0x10: // djnz
         {
+            // z80_cycles[0x10] (the base table this return value is added to
+            // in the caller's `cycles += acycles[op]`) is 0, so this return
+            // value IS the whole instruction cost, not a delta.  Real Z80
+            // timing: DJNZ taken = 13 T (4 opcode fetch + 3 offset fetch +
+            // 5 internal + 1 extra for the taken branch), not taken = 8 T.
+            // Was 3/2 (an M-cycle *count*, not T-states) -- verified by a
+            // minimal `LD B,0 / DJNZ $ / RET` (256-iteration loop) probe:
+            // z88dk-ticks (a real T-state counter) measures 3340 T for that
+            // program; this bug made ntvcm report 808.
             uint8_t offset = pcbyte();
             reg.b = reg.b - 1;
             if ( 0 != reg.b )
             {
                 reg.pc = reg.pc + (int16_t) (int8_t) offset;
-                cycles = 3;
+                cycles = 13;
             }
             else
-                cycles = 2;
+                cycles = 8;
             break;
         }
         case 0x18: // jr n
         {
+            // Real Z80 timing: JR is unconditional and always 12 T (4 + 3 + 5).
+            // Was 3 (see the 0x10 comment above for why that's wrong).
             uint8_t offset = pcbyte();
             reg.pc = reg.pc + (int16_t) (int8_t) offset;
-            cycles = 3;
+            cycles = 12;
             break;
         }
         case 0x20: // jr nz, n
         {
+            // Real Z80 timing: taken = 12 T, not taken = 7 T (no offset-add
+            // cycles when the branch isn't taken).  Was 3/2.
             uint8_t offset = pcbyte();
             if ( !reg.fZero )
             {
                 reg.pc = reg.pc + (int16_t) (int8_t) offset;
-                cycles = 3;
+                cycles = 12;
             }
             else
-                cycles = 2;
+                cycles = 7;
             break;
         }
         case 0x28: // jr z, n
@@ -772,10 +785,10 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
             if ( reg.fZero )
             {
                 reg.pc = reg.pc + (int16_t) (int8_t) offset;
-                cycles = 3;
+                cycles = 12;
             }
             else
-                cycles = 2;
+                cycles = 7;
             break;
         }
         case 0x30: // jr nc, n
@@ -784,10 +797,10 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
             if ( !reg.fCarry )
             {
                 reg.pc = reg.pc + (int16_t) (int8_t) offset;
-                cycles = 3;
+                cycles = 12;
             }
             else
-                cycles = 2;
+                cycles = 7;
             break;
         }
         case 0x38: // jr c, n
@@ -796,10 +809,10 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
             if ( reg.fCarry )
             {
                 reg.pc = reg.pc + (int16_t) (int8_t) offset;
-                cycles = 3;
+                cycles = 12;
             }
             else
-                cycles = 2;
+                cycles = 7;
             break;
         }
         case 0xcb: // rotate / bits
@@ -909,14 +922,25 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
 
             if ( 0x46 == ( op2 & 0x47 ) ) // ld r, (i + #)
             {
-                cycles = 5;
+                // z80_cycles[0xDD]/[0xFD] (the base this return is added to)
+                // is 0, so this must be the FULL instruction cost.  Real Z80:
+                // LD r,(IX+d)/(IY+d) = 19 T (DD/FD prefix 4 + opcode 4 +
+                // displacement read 3 + 5 internal + memory read 3).  Was 5
+                // -- an M-cycle-style placeholder, not T-states, same class
+                // of bug as the DJNZ/JR one fixed above.  This is the
+                // dominant remaining source of ntvcm-vs-ticks divergence on
+                // compiled C code: dcc/sdcc use IX as a frame pointer, so
+                // `ld h,(ix-5)`-style locals access is the hottest opcode
+                // pattern in real programs (13413 hits in the sieve
+                // benchmark's -g profile, e.g.).
+                cycles = 19;
                 uint8_t op3 = pcbyte(); // consume op3
                 uint16_t address = reg.z80_getIndex( op ) + (uint16_t) (int16_t) (int8_t) op3;
                 * dst_address( op2 ) = memory[ address ];
             }
             else if ( 0x70 == ( op2 & 0xf8 ) )  // ld (i+#), r/#
             {
-                cycles = 5;
+                cycles = 19; // real Z80 timing; see the ld-r,(i+#) comment above
                 uint8_t op3 = pcbyte(); // consume op3
 
                 // if 6, there is an op4 for the index (not hl-indexed memory); otherwise use a register value
@@ -992,21 +1016,21 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
                 * reg.z80_getIndexByteAddress( op, 1 ) = pcbyte();
             else if ( 0x34 == op2 ) // inc (i + index)
             {
-                cycles = 6;
+                cycles = 23; // real Z80 timing (was 6; see the ld-r,(i+#) comment above)
                 uint16_t i = reg.z80_getIndex( op ) + (int16_t) (int8_t) pcbyte();
                 uint8_t x = memory[ i ];
                 memory[i] = op_inc<true>( x );
             }
             else if ( 0x35 == op2 ) // dec (i + index)
             {
-                cycles = 6;
+                cycles = 23; // real Z80 timing (was 6; see the ld-r,(i+#) comment above)
                 uint16_t i = reg.z80_getIndex( op ) + (int16_t) (int8_t) pcbyte();
                 uint8_t x = memory[ i ];
                 memory[ i ] = op_dec<true>( x );
             }
             else if ( 0x36 == op2 )  // ld (ix/iy + index), immediate byte
             {
-                cycles = 5;
+                cycles = 19; // real Z80 timing (was 5; see the ld-r,(i+#) comment above)
                 uint16_t i = reg.z80_getIndex( op ) + (int16_t) (int8_t) pcbyte();
                 uint8_t val = pcbyte();
                 memory[ i ] = val;
@@ -1048,7 +1072,7 @@ uint16_t z80_emulate( uint8_t op )    // this is just for instructions that aren
             }
             else if ( 0x86 == ( op2 & 0xc7 ) ) // math on [ ix/iy + index ]
             {
-                cycles = 5;
+                cycles = 19; // real Z80 timing (was 5; see the ld-r,(i+#) comment above)
                 uint16_t x = reg.z80_getIndex( op );
                 x += (int16_t) (int8_t) pcbyte();
                 op_math<true>( op2, memory[ x ] );
@@ -1950,16 +1974,27 @@ template <bool Z80Mode> static uint16_t x80_emulate_impl( uint16_t maxcycles )
             case 0xc1: case 0xd1: case 0xe1: { * reg.rpAddressFromOp( op ) = popword(); break; } // pop rp
             case 0xc2: case 0xd2: case 0xe2: case 0xf2: case 0xca: case 0xda: case 0xea: case 0xfa: // conditional jmp
             {
+                // Real 8080/Z80 timing: conditional JP costs the SAME whether
+                // taken or not (10 T on Z80) -- unlike CALL/RET, there's no
+                // "skip the extra work" saving for a plain jump.  Previously
+                // this subtracted `cyclesnt` (6) on the not-taken path, which
+                // is only correct for RET cc; verified wrong via a probe of
+                // 256 not-taken `JP NZ` instructions (XOR A; JP NZ,x256):
+                // z88dk-ticks measures 6924 T for that program, this bug made
+                // ntvcm report 5412 (256 * 6 T short, i.e. exactly `cyclesnt`
+                // per not-taken JP).
                 uint16_t address = pcword(); // must be consumed regardless of whether jump is taken
                 if ( check_conditional( op ) )
                     reg.pc = address;
-                else
-                    cycles -= cyclesnt;
                 break;
             }
             case 0xc3: { reg.pc = pcword(); break; } // jmp a16
             case 0xc4: case 0xd4: case 0xe4: case 0xf4: case 0xcc: case 0xdc: case 0xec: case 0xfc: // conditional call
             {
+                // Not-taken CALL cc saves 6 T on 8080 (11 vs 17) but 7 T on
+                // Z80 (10 vs 17); the two ISAs differ here even though they
+                // agree for JP cc (0 T diff) and RET cc (6 T diff, see the
+                // conditional-return case above, which is correct for both).
                 uint16_t address = pcword(); // must be consumed regardless of whether call is taken
                 if ( check_conditional( op ) )
                 {
@@ -1967,7 +2002,7 @@ template <bool Z80Mode> static uint16_t x80_emulate_impl( uint16_t maxcycles )
                     reg.pc = address;
                 }
                 else
-                    cycles -= cyclesnt;
+                    cycles -= ( Z80Mode ? 7 : cyclesnt );
                 break;
             }
             case 0xc5: case 0xd5: case 0xe5: { pushword( * reg.rpAddressFromOp( op ) ); break; } // push rp

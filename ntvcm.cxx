@@ -3135,6 +3135,7 @@ void help()
     printf( "  -k        translate Kaypro II extended characters to ASCII\n" );
     printf( "            equivalents.\n" );
     printf( "  -l        force CP/M filenames to be lowercase.\n" );
+    printf( "  -m:<file> write a raw 64K memory dump to <file> at app exit.\n" );
     printf( "  -n        don't sleep for apps in tight bdos 6 loops. (Use\n" );
     printf( "            with apps like nvbasic).\n" );
     printf( "  -p        show performance information at app exit.\n" );
@@ -3382,6 +3383,7 @@ int main( int argc, char * argv[] )
         bool trace = false;
         bool traceInstructions = false;
         const char * pfileProfile = 0;
+        const char * pfileMemDump = 0; // -m:<file>. Diagnostic memory dump at exit (see dump_memory()).
         uint64_t clockrate = 0;
         bool showPerformance = false;
         bool force80x24 = false;
@@ -3481,6 +3483,25 @@ int main( int argc, char * argv[] )
                         g_kayproToCP437 = true;
                     else if ( 'l' == ca )
                         g_forceLowercase = true;
+                    else if ( 'm' == ca )
+                    {
+                        if ( ':' == parg[2] )
+                        {
+                            if ( !strlen( parg + 3 ) )
+                                error( ":<filename> expected with -m" );
+
+                            pfileMemDump = parg + 3;
+                        }
+                        else if ( 0 == parg[2] )
+                        {
+                            if ( ++i >= argc )
+                                error( ":<filename> expected with -m" );
+
+                            pfileMemDump = argv[i];
+                        }
+                        else
+                            error( ":<filename> expected with -m" );
+                    }
                     else if ( 'n' == ca )
                         g_sleepOnKbdLoop = false;
                     else if ( 'p' == ca )
@@ -3806,6 +3827,9 @@ int main( int argc, char * argv[] )
                 }
             }
         }
+
+        if ( pfileMemDump )
+            dump_memory( pfileMemDump );
 
         if ( showPerformance )
         {
