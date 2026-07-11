@@ -3135,6 +3135,7 @@ void help()
     printf( "  -k        translate Kaypro II extended characters to ASCII\n" );
     printf( "            equivalents.\n" );
     printf( "  -l        force CP/M filenames to be lowercase.\n" );
+    printf( "  -m:X      stop after X million cycles (default: unlimited).\n" );
     printf( "  -n        don't sleep for apps in tight bdos 6 loops. (Use\n" );
     printf( "            with apps like nvbasic).\n" );
     printf( "  -p        show performance information at app exit.\n" );
@@ -3387,6 +3388,7 @@ int main( int argc, char * argv[] )
         bool force80x24 = false;
         bool clearDisplayOnExit = true;
         uint64_t processAffinityMask = 0; // by default let the OS decide
+        uint64_t maxCycles = UINT64_MAX;  // -m:X sets limit to X million cycles
 
         for ( int i = 1; i < argc; i++ )
         {
@@ -3481,6 +3483,13 @@ int main( int argc, char * argv[] )
                         g_kayproToCP437 = true;
                     else if ( 'l' == ca )
                         g_forceLowercase = true;
+                    else if ( 'm' == ca )
+                    {
+                        if ( ':' == parg[2] )
+                            maxCycles = strtoull( parg + 3, 0, 10 ) * 1000000ULL;
+                        else
+                            error( "colon required after m argument" );
+                    }
                     else if ( 'n' == ca )
                         g_sleepOnKbdLoop = false;
                     else if ( 'p' == ca )
@@ -3767,6 +3776,12 @@ int main( int argc, char * argv[] )
 
             if ( g_emulationEnded )
                 break;
+
+            if ( total_cycles >= maxCycles )
+            {
+                printf( "ntvcm: cycle limit %llu reached\n", (unsigned long long)maxCycles );
+                break;
+            }
 
             delay.Delay( total_cycles );
         } while ( true );
